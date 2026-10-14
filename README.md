@@ -1,41 +1,41 @@
-# Zorin persoonlijke instellingen
+# Zorin Personal Setup
 
-Dit interactieve script zet gekozen persoonlijke Zorin-instellingen. Het is bedoeld voor herinstallaties en kan veilig opnieuw worden uitgevoerd.
+This interactive script applies selected personal settings on Zorin OS. It is intended for reinstallations and can be safely run again.
 
-## Uitvoeren
+## Usage
 
-Start de configuratie:
+Start the setup:
 
 ```sh
 bash setup-zorin.sh
 ```
 
-Vink in het eerste scherm aan wat je wilt configureren. Onderdelen beginnen uitgevinkt; bestaande instellingen van niet-geselecteerde onderdelen blijven ongewijzigd. Als je audio-invoer of -uitvoer kiest, verschijnt een tweede scherm met de beschikbare PipeWire-profielen. Je ziet vooraf welke opties nu actief zijn.
+Select the features to configure in the first screen. Everything starts unchecked; existing settings for unselected features remain unchanged. If you select audio input or output, a second screen lists the available PipeWire profiles and marks currently active choices.
 
-Het script toont de volledige selectie en vraagt om bevestiging voordat het wijzigingen toepast. Je kunt op elk keuzescherm annuleren.
+The script shows a summary and asks for confirmation before applying changes. You can cancel at any selection screen.
 
-Controleer hetzelfde proces zonder wijzigingen:
+Run the same flow without applying changes:
 
 ```sh
 bash setup-zorin.sh --dry-run
 ```
 
-Het script vereist geen `sudo`. Het downloadt ontbrekende GNOME-uitbreidingen van extensions.gnome.org. Vanuit de Flatpak-terminal van VS Code gebruikt het `flatpak-spawn --host`; in een normale terminal voert het dezelfde opdrachten rechtstreeks op het hostsysteem uit.
+The script does not require `sudo`. Missing GNOME extensions are downloaded from extensions.gnome.org. When run from the VS Code Flatpak terminal, it uses `flatpak-spawn --host`; from a regular terminal, it runs commands directly on the host.
 
-## Wat wordt ingesteld
+## Features
 
-- **macOS-achtige bovenbalk:** behoudt de GNOME-bovenbalk en zet het Zorin-dock onderaan, gecentreerd en dynamisch; verbergt **System Menu** en **Date Menu** in het dock.
-- **Windows-achtige screenshottoets:** behoudt `Print Screen` en koppelt `Super+Shift+S` aan de screenshotinterface.
-- **Klembordgeschiedenis:** installeert Clipboard Indicator met `Super+V`, maximaal 25 items, favorieten als enige cachebestanden en afbeeldingscache uit.
-- **Spotlight-achtige zoekfunctie:** installeert Search Light met `Super+Spatie`, opent op het scherm met de muisaanwijzer en toont een pictogram in de bovenbalk.
-- **Audio beperken:** toont audio-uitvoer- en invoerprofielen afzonderlijk. Geselecteerde profielen blijven beschikbaar; de overige profielen op dezelfde kaarten worden uitgeschakeld. Per geluidskaart kan één profiel per richting worden gekozen. Het script behoudt de niet-geselecteerde richting waar een passend gecombineerd profiel beschikbaar is; ontbreekt zo'n profiel, dan stopt het vóór wijzigingen.
+- **macOS-style top bar:** keeps the GNOME top bar and configures the Zorin dock at the bottom, centered and dynamic; hides **System Menu** and **Date Menu** from the dock.
+- **Windows-style screenshot shortcut:** keeps `Print Screen` and maps `Super+Shift+S` to the screenshot interface.
+- **Clipboard history:** installs Clipboard Indicator with `Super+V`, a 25-item history, favorites-only disk caching, and image caching disabled.
+- **Spotlight-style search:** installs Search Light with `Super+Space`, opens on the monitor under the pointer, and shows an icon in the top bar.
+- **Limit audio devices:** lists input and output profiles separately. Selected profiles are kept; unselected profiles on those cards are disabled. You can choose at most one profile per direction for each audio device. The script preserves the unselected direction when a compatible combined profile exists; otherwise, it stops before making changes.
 
-De onderdelen **Windows-achtige screenshottoets** en **macOS-achtige zoekfunctie** zijn onafhankelijk. Search Light verplaatst ook de sneltoets voor toetsenbordindeling wisselen naar `Super+Alt+Spatie`, zodat `Super+Spatie` beschikbaar is.
+The **Windows-style screenshot shortcut** and **Spotlight-style search** are independent options. Search Light also moves the keyboard-layout switch shortcut to `Super+Alt+Space`, freeing `Super+Space`.
 
-Audioapparaten worden tijdens de installatie op naam en profiel uit PipeWire ontdekt, niet op veranderlijke apparaatnummers. De extensies worden per GNOME-versie uit de officiële extensiecatalogus opgehaald.
+Audio devices are discovered by PipeWire device and profile names, not volatile device IDs. GNOME extensions are downloaded for the detected GNOME Shell version.
 
-## Back-ups en uitbreiden
+## Backups and Extensions
 
-Bij toepassen slaat het script eerst GNOME Shell-instellingen, sneltoetsen en de huidige PipeWire-audiostatus op onder `~/.local/state/zorin-setup/backups/`. Dit is een lokale veiligheidskopie; bewaar ook deze map en de scriptmap buiten de computer als je ze na een schone installatie wilt terugzetten.
+Before applying changes, the script saves GNOME Shell settings, keyboard shortcuts, and the current PipeWire status under `~/.local/state/zorin-setup/backups/`. This is a local backup; copy both this directory and the setup script elsewhere if you need them after a clean reinstall.
 
-Voeg toekomstige voorkeuren toe als afzonderlijke opties aan het eerste keuzescherm en pas ze alleen toe als ze zijn aangevinkt. Het script installeert geen Android-integratie en geen systeem-pakketten. Na het installeren van nieuwe GNOME-extensies kan afmelden en opnieuw aanmelden nodig zijn.
+Add future preferences as separate options in the first selection screen, and apply them only when selected. The script does not install Android integration or system packages. Logging out and back in may be required after installing new GNOME extensions.

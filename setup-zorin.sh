@@ -92,9 +92,9 @@ ask_confirmation() {
     return
   fi
 
-  printf '\n%s\n%s\nDeze wijzigingen toepassen? [j/N] ' "$title" "$message" >&2
+  printf '\n%s\n%s\nApply these changes? [y/N] ' "$title" "$message" >&2
   read -r answer </dev/tty || return 1
-  [[ "$answer" == [jJ] || "$answer" == [jJ][aA] ]]
+  [[ "$answer" == [yY] || "$answer" == [yY][eE][sS] ]]
 }
 
 show_checklist() {
@@ -164,15 +164,15 @@ set_gsetting() {
   local value=$3
 
   if ! host gsettings list-keys "$schema" >/dev/null 2>&1; then
-    warn "GSettings-schema ontbreekt: $schema; $key overgeslagen."
+    warn "GSettings schema is missing: $schema; skipping $key."
     return
   fi
   if ! host gsettings list-keys "$schema" | host grep -Fxq "$key"; then
-    warn "Instelling ontbreekt in $schema: $key; overgeslagen."
+    warn "Setting is missing from $schema: $key; skipping $key."
     return
   fi
 
-  info "Instellen: $schema $key"
+  info "Setting $schema $key"
   if [[ "$DRY_RUN" == false ]]; then
     host gsettings set "$schema" "$key" "$value"
   fi
@@ -186,7 +186,7 @@ transform_json_setting() {
   local updated
 
   current=$(host gsettings get "$schema" "$key") || {
-    warn "Kan $schema $key niet lezen; overgeslagen."
+    warn "Could not read $schema $key; skipping it."
     return
   }
 
@@ -218,7 +218,7 @@ else:
 value = json.dumps(data, separators=(",", ":"))
 print("\x27" + value + "\x27")
 ' "$operation") || {
-    warn "Kan JSON-instelling $schema $key niet verwerken; overgeslagen."
+    warn "Could not process JSON setting $schema $key; skipping it."
     return
   }
 
@@ -240,13 +240,13 @@ backup_current_settings() {
     host dconf dump /org/gnome/desktop/wm/keybindings/ > \
       "$backup_dir/window-keybindings.dconf"
   else
-    warn 'dconf ontbreekt; GNOME-instellingen worden niet vooraf geback-upt.'
+    warn 'dconf is missing; GNOME settings will not be backed up.'
   fi
   if host_has wpctl; then
     host wpctl status -n > "$backup_dir/audio-status.txt"
   fi
 
-  info "Voorafgaande instellingen geback-upt naar $backup_dir"
+  info "Settings backed up to $backup_dir"
 }
 
 extension_supports_shell() {
@@ -279,12 +279,12 @@ install_extension_if_needed() {
 
   if host test -f "$metadata_file" && \
     extension_supports_shell "$metadata_file" "$shell_major"; then
-    info "Extensie is al aanwezig en ondersteunt GNOME $shell_major: $uuid"
+    info "Extension is already installed and supports GNOME $shell_major: $uuid"
     return
   fi
 
   if [[ "$DRY_RUN" == true ]]; then
-    info "Zou de GNOME-extensie installeren: $uuid"
+    info "Would install GNOME extension: $uuid"
     return
   fi
 
@@ -292,7 +292,7 @@ install_extension_if_needed() {
     --data-urlencode "uuid=$uuid" \
     --data-urlencode "shell_version=$shell_major" \
     'https://extensions.gnome.org/extension-info/') || \
-    fail "Kon compatibele extensie-informatie niet ophalen: $uuid"
+    fail "Could not retrieve compatible extension metadata: $uuid"
 
   download_url=$(printf '%s' "$api_response" | host python3 -c '
 import json
@@ -301,18 +301,18 @@ import sys
 data = json.load(sys.stdin)
 shell_major = sys.argv[1]
 if shell_major not in data.get("shell_version_map", {}):
-    raise SystemExit("Geen versie voor deze GNOME Shell-release")
+  raise SystemExit("No version is available for this GNOME Shell release")
 print(data["download_url"])
-' "$shell_major") || fail "Geen GNOME-$shell_major-versie gevonden voor $uuid"
+' "$shell_major") || fail "No GNOME $shell_major version found for $uuid"
 
   host_home=$(host printenv HOME)
   host mkdir -p "$host_home/.cache/zorin-setup/extensions"
   archive="$host_home/.cache/zorin-setup/extensions/$uuid.zip"
   host curl -fLsS --max-time 60 \
     "https://extensions.gnome.org$download_url" -o "$archive" || \
-    fail "Kon extensie niet downloaden: $uuid"
+    fail "Could not download extension: $uuid"
   host gnome-extensions install --force "$archive" || \
-    fail "Kon extensie niet installeren: $uuid"
+    fail "Could not install extension: $uuid"
   RELOGIN_REQUIRED=true
 }
 
@@ -333,7 +333,7 @@ if uuid not in extensions:
 print("[" + ", ".join(repr(extension) for extension in extensions) + "]")
 ')
 
-  info "Inschakelen bij de volgende GNOME-sessie: $uuid"
+  info "Enable in the next GNOME session: $uuid"
   if [[ "$DRY_RUN" == false ]]; then
     host gsettings set "$GNOME_SHELL_SCHEMA" enabled-extensions "$updated"
   fi
@@ -349,27 +349,27 @@ set_extension_gsetting() {
   local available_keys
 
   if [[ "$DRY_RUN" == true ]]; then
-    info "Zou extensie-instelling instellen: $schema $key"
+    info "Would set extension setting: $schema $key"
     return
   fi
 
   host_home=$(host printenv HOME)
   extension_dir="$host_home/.local/share/gnome-shell/extensions/$uuid"
   if ! host test -f "$extension_dir/schemas/gschemas.compiled"; then
-    warn "Extensieschema ontbreekt voor $uuid; $key overgeslagen."
+    warn "Extension schema is missing for $uuid; skipping $key."
     return
   fi
   available_keys=$(host gsettings --schemadir "$extension_dir/schemas" \
     list-keys "$schema" 2>/dev/null) || {
-    warn "Extensieschema niet leesbaar voor $uuid; $key overgeslagen."
+    warn "Could not read extension schema for $uuid; skipping $key."
     return
   }
   if ! printf '%s\n' "$available_keys" | host grep -Fxq "$key"; then
-    warn "Instelling $key bestaat niet in $uuid; overgeslagen."
+    warn "Setting $key does not exist in $uuid; skipping it."
     return
   fi
 
-  info "Instellen: $schema $key"
+  info "Setting $schema $key"
   host gsettings --schemadir "$extension_dir/schemas" \
     set "$schema" "$key" "$value"
 }
@@ -521,19 +521,19 @@ select_features() {
   local feature
   local -a features=(topbar audio-output audio-input shortcuts clipboard spotlight)
   local -a labels=(
-    'macOS-achtige bovenbalk en Zorin-dock'
-    'Audio-uitvoerapparaten beperken'
-    'Audio-invoerapparaten beperken'
-    'Windows-achtige screenshottoets (Super+Shift+S)'
-    'Klembordgeschiedenis (Super+V)'
-    'Spotlight-achtige zoekfunctie (Super+Spatie)'
+    'macOS-style top bar and Zorin dock'
+    'Limit audio output devices'
+    'Limit audio input devices'
+    'Windows-style screenshot shortcut (Super+Shift+S)'
+    'Clipboard history (Super+V)'
+    'Spotlight-style search (Super+Space)'
   )
 
   MENU_TAGS=("${features[@]}")
   MENU_LABELS=("${labels[@]}")
   MENU_STATUSES=(OFF OFF OFF OFF OFF OFF)
-  show_checklist 'Zorin-instellingen' \
-    'Vink aan wat je wilt configureren. Bestaande instellingen van niet-aangevinkte onderdelen blijven ongewijzigd.' || \
+  show_checklist 'Zorin Personal Setup' \
+    'Select the features to configure. Unselected features will be left unchanged.' || \
     return 1
 
   SELECTED_FEATURES=()
@@ -557,7 +557,7 @@ select_audio_endpoints() {
 
   if ! host_has wpctl || ! host_has pw-cli || ! host_has pw-dump || \
     ! host_has python3; then
-    warn 'PipeWire-hulpmiddelen ontbreken; de audio-keuze is niet beschikbaar.'
+    warn 'PipeWire tools are missing; audio selection is unavailable.'
     return 1
   fi
 
@@ -577,19 +577,19 @@ select_audio_endpoints() {
   done < <(audio_catalog "$direction")
 
   if (( ${#MENU_TAGS[@]} == 0 )); then
-    warn "Geen ondersteunde audio-$direction-profielen gevonden."
+    warn "No supported audio $direction profiles were found."
     return 1
   fi
 
   if [[ "$direction" == output ]]; then
-    label='Vink de uitvoerprofielen aan die je wilt behouden. Niet-aangevinkte profielen worden uitgeschakeld.'
+    label='Select the output profiles to keep. Unselected profiles will be disabled.'
   else
-    label='Vink de microfoonprofielen aan die je wilt behouden. Niet-aangevinkte profielen worden uitgeschakeld.'
+    label='Select the input profiles to keep. Unselected profiles will be disabled.'
   fi
   if [[ "$direction" == output ]]; then
-    show_checklist 'Audio-uitgangen beperken' "$label" || return 1
+    show_checklist 'Limit Audio Outputs' "$label" || return 1
   else
-    show_checklist 'Audio-ingangen beperken' "$label" || return 1
+    show_checklist 'Limit Audio Inputs' "$label" || return 1
   fi
 
   while IFS= read -r tag; do
@@ -597,8 +597,8 @@ select_audio_endpoints() {
     device_id=${AUDIO_DEVICE_BY_TAG[$tag]}
     token=${AUDIO_TOKEN_BY_TAG[$tag]}
     if [[ -n "${selected_by_device[$device_id]:-}" ]]; then
-      show_message 'Kies één profiel per geluidskaart' \
-        "${AUDIO_LABEL_BY_TAG[$tag]} en een andere geselecteerde optie horen bij dezelfde geluidskaart. Kies per kaart hoogstens één $direction-profiel."
+      show_message 'Choose one profile per audio device' \
+        "${AUDIO_LABEL_BY_TAG[$tag]} and another selected option belong to the same audio device. Choose at most one $direction profile per device."
       return 1
     fi
     selected_by_device[$device_id]=$tag
@@ -607,8 +607,8 @@ select_audio_endpoints() {
   done <<< "$CHECKLIST_RESULT"
 
   if (( ${#selected_tags[@]} == 0 )); then
-    show_message 'Geen audioapparaat geselecteerd' \
-      "Er moet minstens één $direction actief blijven. Er worden geen audio-profielen gewijzigd."
+    show_message 'No audio device selected' \
+      "At least one $direction must remain enabled. No audio profiles will be changed."
     return 1
   fi
 
@@ -664,12 +664,12 @@ build_audio_plan() {
 
     target_profile=$(profile_for_tokens "$device_id" "$output_token" "$input_token")
     if [[ -z "$target_profile" ]]; then
-      warn "Geen profiel gevonden om de selectie voor '$description' veilig toe te passen. Er is niets gewijzigd."
+      warn "Could not find a profile to safely apply the selection for '$description'. Nothing was changed."
       return 1
     fi
     profile_index=$(profile_index_for_name "$device_id" "$target_profile")
     if [[ -z "$profile_index" ]]; then
-      warn "Profiel '$target_profile' is niet beschikbaar op '$description'. Er is niets gewijzigd."
+      warn "Profile '$target_profile' is unavailable on '$description'. Nothing was changed."
       return 1
     fi
 
@@ -701,13 +701,13 @@ apply_audio_plan() {
     target_profile=${AUDIO_PLAN_PROFILES[index]}
     profile_index=${AUDIO_PLAN_PROFILE_INDICES[index]}
     if [[ -z "$profile_index" ]]; then
-      warn "Profiel '$target_profile' is niet meer beschikbaar op apparaat $device_id."
+      warn "Profile '$target_profile' is no longer available on device $device_id."
       return 1
     fi
     if [[ "$DRY_RUN" == true ]]; then
-      info "Zou audio-profiel instellen: ${AUDIO_PLAN_DESCRIPTIONS[index]} -> $target_profile"
+      info "Would set audio profile: ${AUDIO_PLAN_DESCRIPTIONS[index]} -> $target_profile"
     else
-      info "Audio-profiel: ${AUDIO_PLAN_DESCRIPTIONS[index]} -> $target_profile"
+      info "Audio profile: ${AUDIO_PLAN_DESCRIPTIONS[index]} -> $target_profile"
       host wpctl set-profile "$device_id" "$profile_index"
     fi
   done
@@ -720,24 +720,24 @@ print_selection_summary() {
 
   for feature in "${SELECTED_FEATURES[@]}"; do
     case "$feature" in
-      topbar) summary+=$'\n- macOS-achtige bovenbalk en Zorin-dock' ;;
-      audio-output) summary+=$'\n- Audio-uitgangen beperken' ;;
-      audio-input) summary+=$'\n- Audio-ingangen beperken' ;;
-      shortcuts) summary+=$'\n- Windows-achtige screenshottoetsen' ;;
-      clipboard) summary+=$'\n- Klembordgeschiedenis' ;;
-      spotlight) summary+=$'\n- Spotlight-achtige zoekfunctie' ;;
+      topbar) summary+=$'\n- macOS-style top bar and Zorin dock' ;;
+      audio-output) summary+=$'\n- Limit audio outputs' ;;
+      audio-input) summary+=$'\n- Limit audio inputs' ;;
+      shortcuts) summary+=$'\n- Windows-style screenshot shortcuts' ;;
+      clipboard) summary+=$'\n- Clipboard history' ;;
+      spotlight) summary+=$'\n- Spotlight-style search' ;;
     esac
   done
 
   if feature_selected audio-output; then
-    summary+=$'\n\nTe behouden uitgangen:'
+    summary+=$'\n\nOutputs to keep:'
     for tag in "${SELECTED_AUDIO_OUTPUTS[@]}"; do
       summary+=$'\n- '
       summary+=${AUDIO_LABEL_BY_TAG[$tag]}
     done
   fi
   if feature_selected audio-input; then
-    summary+=$'\n\nTe behouden ingangen:'
+    summary+=$'\n\nInputs to keep:'
     for tag in "${SELECTED_AUDIO_INPUTS[@]}"; do
       summary+=$'\n- '
       summary+=${AUDIO_LABEL_BY_TAG[$tag]}
@@ -806,30 +806,30 @@ main() {
   local shell_major
   local summary
 
-  host_has gsettings || fail 'gsettings ontbreekt op het systeem.'
-  host_has python3 || fail 'python3 ontbreekt op het systeem.'
+  host_has gsettings || fail 'gsettings is required.'
+  host_has python3 || fail 'python3 is required.'
 
   os_id=$(host sh -c '. /etc/os-release; printf "%s" "$ID"')
-  [[ "$os_id" == zorin ]] || fail 'Dit script is bedoeld voor Zorin OS.'
+  [[ "$os_id" == zorin ]] || fail 'This script is intended for Zorin OS.'
   shell_version=$(host gnome-shell --version | host awk '{print $3}')
   shell_major=${shell_version%%.*}
-  [[ "$shell_major" =~ ^[0-9]+$ ]] || fail 'GNOME-versie kon niet worden bepaald.'
+  [[ "$shell_major" =~ ^[0-9]+$ ]] || fail 'Could not determine the GNOME version.'
 
   if ! select_features; then
-    info 'Installatie geannuleerd; er zijn geen instellingen gewijzigd.'
+    info 'Setup cancelled; no settings were changed.'
     exit 0
   fi
   if (( ${#SELECTED_FEATURES[@]} == 0 )); then
-    info 'Geen onderdelen geselecteerd; er zijn geen instellingen gewijzigd.'
+    info 'No features selected; no settings were changed.'
     exit 0
   fi
 
   if feature_selected audio-output && ! select_audio_endpoints output; then
-    info 'Audio-uitvoerkeuze afgebroken; er zijn geen instellingen gewijzigd.'
+    info 'Audio output selection cancelled; no settings were changed.'
     exit 0
   fi
   if feature_selected audio-input && ! select_audio_endpoints input; then
-    info 'Audio-invoerkeuze afgebroken; er zijn geen instellingen gewijzigd.'
+    info 'Audio input selection cancelled; no settings were changed.'
     exit 0
   fi
   if feature_selected audio-output || feature_selected audio-input; then
@@ -838,35 +838,35 @@ main() {
 
   summary=$(print_selection_summary)
   if [[ "$DRY_RUN" == true ]]; then
-    info "Controlemodus: Zorin OS, GNOME $shell_version; er worden geen wijzigingen opgeslagen."
-    if ! ask_confirmation 'Geselecteerde wijzigingen controleren' "$summary"; then
-      info 'Controle geannuleerd; er zijn geen instellingen gewijzigd.'
+    info "Dry run: Zorin OS, GNOME $shell_version; no changes will be saved."
+    if ! ask_confirmation 'Review selected changes' "$summary"; then
+      info 'Review cancelled; no settings were changed.'
       exit 0
     fi
     apply_selected_features
-    info 'Controle voltooid; er zijn geen instellingen gewijzigd.'
+    info 'Dry run complete; no settings were changed.'
     exit 0
   fi
 
-  if ! ask_confirmation 'Zorin-instellingen bevestigen' "$summary"; then
-    info 'Installatie geannuleerd; er zijn geen instellingen gewijzigd.'
+  if ! ask_confirmation 'Confirm Zorin setup' "$summary"; then
+    info 'Setup cancelled; no settings were changed.'
     exit 0
   fi
 
-  info "Configuratie toepassen op Zorin OS met GNOME $shell_version"
+  info "Applying configuration to Zorin OS with GNOME $shell_version"
   backup_current_settings
   if feature_selected topbar || feature_selected clipboard || feature_selected spotlight; then
-    host_has gnome-extensions || fail 'gnome-extensions ontbreekt op het systeem.'
+    host_has gnome-extensions || fail 'gnome-extensions is required.'
   fi
   if feature_selected clipboard || feature_selected spotlight; then
-    host_has curl || fail 'curl ontbreekt; extensies kunnen niet worden gedownload.'
+    host_has curl || fail 'curl is required to download GNOME extensions.'
   fi
   apply_selected_features
 
   if [[ "$RELOGIN_REQUIRED" == true ]]; then
-    info 'Meld je af en weer aan om nieuw geïnstalleerde extensies te laden.'
+    info 'Log out and back in to load newly installed extensions.'
   else
-    info 'Klaar. Herstart GNOME of meld je opnieuw aan als een extensie nog niet actief is.'
+    info 'Done. Restart GNOME or log back in if an extension is not active yet.'
   fi
 }
 
