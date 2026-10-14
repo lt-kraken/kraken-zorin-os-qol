@@ -1,41 +1,42 @@
 # Zorin Personal Setup
 
-This interactive script applies selected personal settings on Zorin OS. It is intended for reinstallations and can be safely run again.
+A native GTK4/libadwaita desktop app for optional desktop tools and reusable personal setup profiles on Zorin OS. Changes are staged for review, and a snapshot is created before they are applied.
 
-## Usage
-
-Start the setup:
+## Run
 
 ```sh
-bash setup-zorin.sh
+bash app/run.sh
 ```
 
-Select the features to configure in the first screen. Everything starts unchecked; existing settings for unselected features remain unchanged. If you select audio input or output, a second screen lists the available PipeWire profiles and marks currently active choices.
+The launcher builds with Rust in the GNOME 49 SDK and starts the binary on the host desktop so it can access the current GNOME session. It may offer to install the SDK for your user. No `sudo` is used. Rust stable must be installed with rustup.
 
-The script shows a summary and asks for confirmation before applying changes. You can cancel at any selection screen.
-
-Run the same flow without applying changes:
+To build manually:
 
 ```sh
-bash setup-zorin.sh --dry-run
+. "$HOME/.cargo/env"
+cd app
+cargo test
+cargo build --release
 ```
 
-The script does not require `sudo`. Missing GNOME extensions are downloaded from extensions.gnome.org. When run from the VS Code Flatpak terminal, it uses `flatpak-spawn --host`; from a regular terminal, it runs commands directly on the host.
+The GNOME SDK is needed for GTK development files. `app/run.sh` provides the SDK build path.
 
 ## Features
 
-- **macOS-style top bar:** keeps the GNOME top bar and configures the Zorin dock at the bottom, centered and dynamic; hides **System Menu** and **Date Menu** from the dock.
-- **Windows-style screenshot shortcut:** keeps `Print Screen` and maps `Super+Shift+S` to the screenshot interface.
-- **Clipboard history:** installs Clipboard Indicator with `Super+V`, a 25-item history, favorites-only disk caching, and image caching disabled.
-- **Spotlight-style search:** installs Search Light with `Super+Space`, opens on the monitor under the pointer, and shows an icon in the top bar.
-- **Limit audio devices:** lists input and output profiles separately. Selected profiles are kept; unselected profiles on those cards are disabled. You can choose at most one profile per direction for each audio device. The script preserves the unselected direction when a compatible combined profile exists; otherwise, it stops before making changes.
+- **Profiles:** save, replace, stage, and delete personal selections for Clipboard Indicator, Search Light, the Focus shortcut, and clipboard history cleanup. Staging never applies a profile; use **Apply changes** to review and confirm it.
+- **Shortcuts:** optionally install Clipboard Indicator and Search Light GNOME Shell extensions and configure a Focus mode toggle shortcut.
+- **Workflow:** temporarily prevent automatic sleep for 30 minutes, 1 hour, or 2 hours. The request expires automatically, can be stopped early, and is released when the app closes. Install or launch LocalSend for iPhone file transfers.
+- **Privacy:** clear Clipboard Indicator history at login. Clipboard Indicator is an optional third-party extension; its history may contain sensitive content.
+- **Backups:** create snapshots, automatically back up before Apply, and restore a selected snapshot. New snapshots contain this tool's managed desktop preferences and saved profiles. Older snapshots remain restorable, including their prior audio-profile data; installed applications are not removed during restore.
 
-The **Windows-style screenshot shortcut** and **Spotlight-style search** are independent options. Search Light also moves the keyboard-layout switch shortcut to `Super+Alt+Space`, freeing `Super+Space`.
+Settings and profiles are changed on the user account only. Profiles are stored in `~/.config/zorin-personal-setup/profiles.json`; snapshots are stored in `~/.local/state/zorin-setup/backups/`. Temporary keep-awake uses `systemd-inhibit` and does not alter persistent power settings.
 
-Audio devices are discovered by PipeWire device and profile names, not volatile device IDs. GNOME extensions are downloaded for the detected GNOME Shell version.
+The app intentionally does not duplicate Zorin/GNOME controls for Night Light, appearance, sound, screenshots, window tiling, workspaces, screen locking, or startup applications.
 
-## Backups and Extensions
+## Project Layout
 
-Before applying changes, the script saves GNOME Shell settings, keyboard shortcuts, and the current PipeWire status under `~/.local/state/zorin-setup/backups/`. This is a local backup; copy both this directory and the setup script elsewhere if you need them after a clean reinstall.
+- `app/` contains the Rust GTK4/libadwaita application and backend.
+- `app/run.sh` builds and launches the desktop app through the GNOME SDK.
+- `setup-zorin.sh` is the earlier shell-based setup tool retained as a reference while the native app is developed.
 
-Add future preferences as separate options in the first selection screen, and apply them only when selected. The script does not install Android integration or system packages. Logging out and back in may be required after installing new GNOME extensions.
+The app is under active development. Review the staged changes before applying them, and keep a copy of `~/.local/state/zorin-setup/backups/` outside the computer if you need it after a clean reinstall.

@@ -1,0 +1,13 @@
+[package]
+name = "zorin-personal-setup"
+version = "0.1.0"
+edition = "2021"
+description = "A native Zorin OS settings and setup assistant"
+license = "MIT"
+
+[dependencies]
+adw = { package = "libadwaita", version = "0.8", features = ["v1_5"] }
+gio = "0.21"
+glib = "0.21"
+gtk = { package = "gtk4", version = "0.10" }
+serde_json = "1"

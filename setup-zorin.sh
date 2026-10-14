@@ -10,18 +10,44 @@ readonly TASKBAR_SCHEMA='org.gnome.shell.extensions.zorin-taskbar'
 
 DRY_RUN=false
 RELOGIN_REQUIRED=false
+BACKUP_DIR=''
+SELECTED_BACKUP=''
 SELECTED_FEATURES=()
 SELECTED_AUDIO_INPUTS=()
 SELECTED_AUDIO_OUTPUTS=()
+SELECTED_STARTUP_APPS=()
+SELECTED_DOCK_POSITION=''
+SELECTED_DOCK_SIZE=''
+SELECTED_LOCK_DELAY=''
 MENU_TAGS=()
 MENU_LABELS=()
 MENU_STATUSES=()
+RADIOLIST_RESULT=''
 AUDIO_ENDPOINT_COUNTER=0
 declare -A AUDIO_DEVICE_BY_TAG=()
 declare -A AUDIO_TOKEN_BY_TAG=()
 declare -A AUDIO_LABEL_BY_TAG=()
 declare -A SELECTED_INPUT_BY_DEVICE=()
 declare -A SELECTED_OUTPUT_BY_DEVICE=()
+declare -A STARTUP_APP_BY_TAG=()
+declare -A STARTUP_NAME_BY_TAG=()
+declare -A STARTUP_LABEL_BY_TAG=()
+declare -A SELECTED_FILE_SETTINGS=()
+
+readonly MANAGED_DCONF_PATHS=(
+  /org/gnome/shell/
+  /org/gnome/desktop/wm/keybindings/
+  /org/gnome/settings-daemon/plugins/media-keys/
+  /org/gnome/settings-daemon/plugins/color/
+  /org/gnome/desktop/screensaver/
+  /org/gnome/desktop/session/
+  /org/gnome/desktop/notifications/
+  /org/gnome/nautilus/preferences/
+  /org/gnome/shell/extensions/zorin-taskbar/
+  /org/gnome/shell/extensions/zorin-tiling-shell/
+  /org/gnome/shell/extensions/clipboard-indicator/
+  /org/gnome/shell/extensions/search-light/
+)
 
 usage() {
   printf 'Usage: %s [--dry-run]\n' "${0##*/}"
@@ -148,6 +174,40 @@ show_checklist() {
   fi
 }
 
+show_radiolist() {
+  local title=$1
+  local message=$2
+  local answer
+  local -a options=()
+
+  if (( ${#MENU_TAGS[@]} == 0 )); then
+    return 1
+  fi
+  for (( index = 0; index < ${#MENU_TAGS[@]}; index++ )); do
+    options+=("${MENU_TAGS[index]}" "${MENU_LABELS[index]}" "${MENU_STATUSES[index]}")
+  done
+
+  if host_has whiptail && [[ -t 0 && -t 1 ]]; then
+    answer=$(host whiptail --title "$title" --radiolist \
+      "$message" 20 88 12 "${options[@]}" 3>&1 1>&2 2>&3) || return 1
+    RADIOLIST_RESULT=$answer
+    return 0
+  fi
+
+  printf '\n%s\n%s\n' "$title" "$message" >&2
+  for (( index = 0; index < ${#MENU_TAGS[@]}; index++ )); do
+    printf '  %2d. %s%s\n' "$((index + 1))" \
+      "${MENU_LABELS[index]}" \
+      "$([[ ${MENU_STATUSES[index]} == ON ]] && printf ' (current)')" >&2
+  done
+  printf 'Choose an option number, or q to cancel: ' >&2
+  read -r answer </dev/tty || return 1
+  [[ "$answer" != q && "$answer" != Q ]] || return 1
+  [[ "$answer" =~ ^[0-9]+$ ]] && \
+    (( answer >= 1 && answer <= ${#MENU_TAGS[@]} )) || return 1
+  RADIOLIST_RESULT=${MENU_TAGS[answer - 1]}
+}
+
 feature_selected() {
   local feature=$1
   local selected
@@ -156,6 +216,179 @@ feature_selected() {
     [[ "$selected" == "$feature" ]] && return 0
   done
   return 1
+}
+
+choose_boolean_setting() {
+  local schema=$1
+  local key=$2
+  local label=$3
+  local current
+
+  current=$(host gsettings get "$schema" "$key") || return 1
+  MENU_TAGS=(true false)
+  MENU_LABELS=(Enabled Disabled)
+  if [[ "$current" == true ]]; then
+    MENU_STATUSES=(ON OFF)
+  else
+    MENU_STATUSES=(OFF ON)
+  fi
+  show_radiolist "$label" 'Choose the setting to use.' || return 1
+  SELECTED_FILE_SETTINGS["$schema:$key"]=$RADIOLIST_RESULT
+}
+
+select_file_preferences() {
+  local current
+  local selected_click
+
+  choose_boolean_setting org.gnome.nautilus.preferences show-hidden-files \
+    'Show hidden files' || return 1
+  choose_boolean_setting org.gnome.nautilus.preferences always-use-location-entry \
+    'Always show the location entry' || return 1
+
+  current=$(host gsettings get org.gnome.nautilus.preferences click-policy)
+  current=${current//\'/}
+  MENU_TAGS=(double single)
+  MENU_LABELS=('Double-click to open' 'Single-click to open')
+  if [[ "$current" == single ]]; then
+    MENU_STATUSES=(OFF ON)
+  else
+    MENU_STATUSES=(ON OFF)
+  fi
+  show_radiolist 'Folder click behavior' 'Choose how folders and files open.' || return 1
+  selected_click=$RADIOLIST_RESULT
+  SELECTED_FILE_SETTINGS[org.gnome.nautilus.preferences:click-policy]=$selected_click
+}
+
+select_dock_preferences() {
+  local current_position
+  local current_size
+
+  current_position=$(host gsettings get "$TASKBAR_SCHEMA" panel-position)
+  current_position=${current_position//\'/}
+  MENU_TAGS=(BOTTOM LEFT RIGHT TOP)
+  MENU_LABELS=('Bottom' 'Left' 'Right' 'Top')
+  MENU_STATUSES=(OFF OFF OFF OFF)
+  for (( index = 0; index < ${#MENU_TAGS[@]}; index++ )); do
+    [[ "${MENU_TAGS[index]}" == "$current_position" ]] && MENU_STATUSES[index]=ON
+  done
+  show_radiolist 'Dock position' 'Choose where the Zorin dock appears.' || return 1
+  SELECTED_DOCK_POSITION=$RADIOLIST_RESULT
+
+  current_size=$(host gsettings get "$TASKBAR_SCHEMA" panel-size)
+  MENU_TAGS=(32 40 48 56 64)
+  MENU_LABELS=('Compact (32 px)' 'Small (40 px)' 'Medium (48 px)' 'Large (56 px)' 'Extra large (64 px)')
+  MENU_STATUSES=(OFF OFF OFF OFF OFF)
+  for (( index = 0; index < ${#MENU_TAGS[@]}; index++ )); do
+    [[ "${MENU_TAGS[index]}" == "$current_size" ]] && MENU_STATUSES[index]=ON
+  done
+  show_radiolist 'Dock size' 'Choose the icon and panel size.' || return 1
+  SELECTED_DOCK_SIZE=$RADIOLIST_RESULT
+}
+
+select_lock_screen_options() {
+  local current_delay
+
+  current_delay=$(host gsettings get org.gnome.desktop.session idle-delay)
+  current_delay=${current_delay//[^0-9]/}
+  MENU_TAGS=(300 600 900 1800)
+  MENU_LABELS=('5 minutes' '10 minutes' '15 minutes' '30 minutes')
+  MENU_STATUSES=(OFF OFF OFF OFF)
+  for (( index = 0; index < ${#MENU_TAGS[@]}; index++ )); do
+    [[ "${MENU_TAGS[index]}" == "$current_delay" ]] && MENU_STATUSES[index]=ON
+  done
+  show_radiolist 'Automatic screen lock' \
+    'Choose the idle time before the screen locks. The lock delay is immediate after the screen turns off.' || return 1
+  SELECTED_LOCK_DELAY=$RADIOLIST_RESULT
+}
+
+startup_app_catalog() {
+  host python3 -c '
+import configparser
+import os
+import sys
+
+home = os.path.expanduser("~")
+data_home = os.environ.get("XDG_DATA_HOME", os.path.join(home, ".local/share"))
+data_dirs = os.environ.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share").split(":")
+roots = [
+    os.path.join(data_home, "applications"),
+    os.path.join(home, ".local/share/flatpak/exports/share/applications"),
+    os.path.join(home, ".local/share/applications"),
+    *[os.path.join(path, "applications") for path in data_dirs],
+    "/var/lib/flatpak/exports/share/applications",
+    "/var/lib/snapd/desktop/applications",
+]
+apps = {}
+for root in roots:
+    if not os.path.isdir(root):
+        continue
+    for current, directories, files in os.walk(root):
+        directories.sort()
+        for filename in sorted(files):
+            if not filename.endswith(".desktop"):
+                continue
+            path = os.path.join(current, filename)
+            app_id = filename
+            if app_id in apps:
+                continue
+            parser = configparser.ConfigParser(interpolation=None, strict=False)
+            parser.optionxform = str
+            try:
+                parser.read(path, encoding="utf-8")
+                entry = parser["Desktop Entry"]
+            except (OSError, KeyError, configparser.Error):
+                continue
+            if entry.get("Type") != "Application" or not entry.get("Exec"):
+                continue
+            if entry.get("NoDisplay", "false").lower() == "true":
+                continue
+            if entry.get("Hidden", "false").lower() == "true":
+                continue
+            name = entry.get("Name", app_id.removesuffix(".desktop"))
+            autostart = os.path.join(home, ".config/autostart", app_id)
+            active = "ON" if os.path.lexists(autostart) else "OFF"
+            apps[app_id] = (name.replace("\t", " "), path, active)
+
+for app_id, (name, path, active) in sorted(apps.items(), key=lambda item: item[1][0].casefold()):
+    print("\t".join((app_id, name, path, active)))
+'
+}
+
+select_startup_apps() {
+  local app_id
+  local name
+  local path
+  local active
+  local tag
+  local -a selected=()
+
+  MENU_TAGS=()
+  MENU_LABELS=()
+  MENU_STATUSES=()
+  STARTUP_APP_BY_TAG=()
+  STARTUP_NAME_BY_TAG=()
+  STARTUP_LABEL_BY_TAG=()
+  while IFS=$'\t' read -r app_id name path active; do
+    [[ -n "$app_id" ]] || continue
+    tag="startup_${#MENU_TAGS[@]}"
+    MENU_TAGS+=("$tag")
+    MENU_LABELS+=("$name")
+    MENU_STATUSES+=("$active")
+    STARTUP_APP_BY_TAG["$tag"]=$path
+    STARTUP_NAME_BY_TAG["$tag"]=$app_id
+    STARTUP_LABEL_BY_TAG["$tag"]=$name
+  done < <(startup_app_catalog)
+
+  if (( ${#MENU_TAGS[@]} == 0 )); then
+    show_message 'No desktop apps found' 'No launchable desktop applications were discovered.'
+    return 1
+  fi
+  show_checklist 'Startup applications' \
+    'Select apps to add to your user startup list. Existing entries are preserved.' || return 1
+  SELECTED_STARTUP_APPS=()
+  while IFS= read -r tag; do
+    [[ -n "$tag" ]] && SELECTED_STARTUP_APPS+=("$tag")
+  done <<< "$CHECKLIST_RESULT"
 }
 
 set_gsetting() {
@@ -228,25 +461,180 @@ print("\x27" + value + "\x27")
 backup_current_settings() {
   local host_home
   local timestamp
-  local backup_dir
+  local path
+  local backup_name
 
   host_home=$(host printenv HOME)
   timestamp=$(host date -u +%Y%m%dT%H%M%SZ)
-  backup_dir="$host_home/.local/state/zorin-setup/backups/$timestamp"
+  BACKUP_DIR="$host_home/.local/state/zorin-setup/backups/$timestamp"
 
-  host mkdir -p "$backup_dir"
+  host mkdir -p "$BACKUP_DIR"
   if host_has dconf; then
-    host dconf dump /org/gnome/shell/ > "$backup_dir/gnome-shell.dconf"
-    host dconf dump /org/gnome/desktop/wm/keybindings/ > \
-      "$backup_dir/window-keybindings.dconf"
+    : > "$BACKUP_DIR/dconf-paths.txt"
+    for path in "${MANAGED_DCONF_PATHS[@]}"; do
+      backup_name=${path#/}
+      backup_name=${backup_name//\//_}
+      host dconf dump "$path" > "$BACKUP_DIR/$backup_name.dconf"
+      printf '%s\n' "$path" >> "$BACKUP_DIR/dconf-paths.txt"
+    done
   else
     warn 'dconf is missing; GNOME settings will not be backed up.'
   fi
   if host_has wpctl; then
-    host wpctl status -n > "$backup_dir/audio-status.txt"
+    host wpctl status -n > "$BACKUP_DIR/audio-status.txt"
+    if host_has pw-dump && host_has pw-cli; then
+      audio_devices_snapshot > "$BACKUP_DIR/audio-profiles.tsv"
+    fi
+  fi
+  if host test -f "$host_home/.local/state/zorin-setup/startup-managed.tsv"; then
+    host cp "$host_home/.local/state/zorin-setup/startup-managed.tsv" \
+      "$BACKUP_DIR/startup-managed.tsv"
   fi
 
-  info "Settings backed up to $backup_dir"
+  info "Managed settings backed up to $BACKUP_DIR"
+}
+
+select_restore_backup() {
+  local host_home
+  local backup_root
+  local backup_name
+  local -a backups=()
+
+  host_home=$(host printenv HOME)
+  backup_root="$host_home/.local/state/zorin-setup/backups"
+  while IFS= read -r backup_name; do
+    [[ -n "$backup_name" ]] && backups+=("$backup_name")
+  done < <(host find "$backup_root" -mindepth 1 -maxdepth 1 -type d \
+    -printf '%f\n' 2>/dev/null | host sort -r)
+
+  if (( ${#backups[@]} == 0 )); then
+    show_message 'No setup backups found' \
+      'Run and confirm a setup first. Its pre-change snapshot will appear here.'
+    return 1
+  fi
+
+  MENU_TAGS=()
+  MENU_LABELS=()
+  MENU_STATUSES=()
+  for backup_name in "${backups[@]}"; do
+    MENU_TAGS+=("$backup_name")
+    MENU_LABELS+=("$backup_name")
+    if (( ${#MENU_TAGS[@]} == 1 )); then
+      MENU_STATUSES+=(ON)
+    else
+      MENU_STATUSES+=(OFF)
+    fi
+  done
+  show_radiolist 'Restore a setup backup' \
+    'Choose a timestamped snapshot of the managed settings.' || return 1
+  SELECTED_BACKUP="$backup_root/$RADIOLIST_RESULT"
+}
+
+restore_backup() {
+  local backup_dir=$1
+  local host_home
+  local path
+  local backup_name
+  local app_id
+  local app_path
+  local destination
+  local startup_manifest
+  local startup_content=''
+
+  host_home=$(host printenv HOME)
+  if ! host test -d "$backup_dir"; then
+    warn "Backup directory not found: $backup_dir"
+    return 1
+  fi
+
+  if host test -f "$backup_dir/dconf-paths.txt"; then
+    while IFS= read -r path; do
+      [[ -n "$path" ]] || continue
+      backup_name=${path#/}
+      backup_name=${backup_name//\//_}
+      info "Restoring settings under $path"
+      if [[ "$DRY_RUN" == false ]]; then
+        host dconf reset -f "$path"
+        host dconf load "$path" < "$backup_dir/$backup_name.dconf"
+      fi
+    done < "$backup_dir/dconf-paths.txt"
+  else
+    if host test -f "$backup_dir/gnome-shell.dconf"; then
+      info 'Restoring legacy GNOME Shell settings.'
+      if [[ "$DRY_RUN" == false ]]; then
+        host dconf load /org/gnome/shell/ < "$backup_dir/gnome-shell.dconf"
+      fi
+    fi
+    if host test -f "$backup_dir/window-keybindings.dconf"; then
+      info 'Restoring legacy window-manager shortcuts.'
+      if [[ "$DRY_RUN" == false ]]; then
+        host dconf load /org/gnome/desktop/wm/keybindings/ < \
+          "$backup_dir/window-keybindings.dconf"
+      fi
+    fi
+  fi
+
+  if host test -f "$backup_dir/audio-profiles.tsv"; then
+    while IFS=$'\t' read -r path backup_name; do
+      [[ -n "$path" && -n "$backup_name" ]] || continue
+      local device_id
+      local profile_index
+      device_id=$(device_id_for_description "$path")
+      if [[ -z "$device_id" ]]; then
+        warn "Audio device not found during restore: $path"
+        continue
+      fi
+      profile_index=$(profile_index_for_name "$device_id" "$backup_name")
+      if [[ -z "$profile_index" ]]; then
+        warn "Audio profile '$backup_name' is unavailable on '$path'."
+        continue
+      fi
+      info "Restoring audio profile: $path -> $backup_name"
+      if [[ "$DRY_RUN" == false ]]; then
+        host wpctl set-profile "$device_id" "$profile_index"
+      fi
+    done < "$backup_dir/audio-profiles.tsv"
+  fi
+
+  startup_manifest="$host_home/.local/state/zorin-setup/startup-managed.tsv"
+  if host test -f "$startup_manifest"; then
+    while IFS=$'\t' read -r app_id app_path; do
+      [[ -n "$app_id" && -n "$app_path" ]] || continue
+      destination="$host_home/.config/autostart/$app_id"
+      if host test -L "$destination" && \
+        [[ "$(host readlink "$destination")" == "$app_path" ]]; then
+        info "Would remove setup-managed startup app: $app_id"
+        if [[ "$DRY_RUN" == false ]]; then
+          host rm "$destination"
+        fi
+      fi
+    done < "$startup_manifest"
+  fi
+  if host test -f "$backup_dir/startup-managed.tsv"; then
+    while IFS=$'\t' read -r app_id app_path; do
+      [[ -n "$app_id" && -n "$app_path" ]] || continue
+      destination="$host_home/.config/autostart/$app_id"
+      if ! host test -e "$destination" && ! host test -L "$destination"; then
+        info "Would restore startup app: $app_id"
+        if [[ "$DRY_RUN" == false ]]; then
+          host mkdir -p "$host_home/.config/autostart"
+          host ln -s "$app_path" "$destination"
+        fi
+      else
+        warn "Startup entry already exists and will be preserved: $app_id"
+      fi
+      startup_content+="$app_id"$'\t'"$app_path"$'\n'
+    done < "$backup_dir/startup-managed.tsv"
+    if [[ "$DRY_RUN" == false ]]; then
+      printf '%s' "$startup_content" | host install -D -m 600 /dev/stdin "$startup_manifest"
+    fi
+  elif [[ "$DRY_RUN" == false ]]; then
+    host rm -f "$startup_manifest"
+  fi
+
+  if [[ "$DRY_RUN" == false ]]; then
+    info 'Managed settings restored. Locally installed apps are not removed.'
+  fi
 }
 
 extension_supports_shell() {
@@ -463,6 +851,23 @@ current_profile_name() {
   '
 }
 
+audio_devices_snapshot() {
+  host pw-dump | host python3 -c '
+import json
+import sys
+
+for obj in json.load(sys.stdin):
+    if obj.get("type") != "PipeWire:Interface:Device":
+        continue
+    props = obj.get("info", {}).get("props", {})
+    if props.get("media.class") == "Audio/Device":
+        print(str(obj["id"]) + "\t" + props.get("device.description", props.get("device.name", "")))
+' | while IFS=$'\t' read -r device_id description; do
+    [[ -n "$device_id" && -n "$description" ]] || continue
+    printf '%s\t%s\n' "$description" "$(current_profile_name "$device_id")"
+  done
+}
+
 profile_index_for_name() {
   local device_id=$1
   local profile_name=$2
@@ -519,7 +924,11 @@ if matches:
 
 select_features() {
   local feature
-  local -a features=(topbar audio-output audio-input shortcuts clipboard spotlight)
+  local -a features=(
+    topbar audio-output audio-input shortcuts clipboard spotlight focus night-light
+    localsend files window-tiling lock-screen clipboard-privacy startup-apps
+    dock-preferences restore
+  )
   local -a labels=(
     'macOS-style top bar and Zorin dock'
     'Limit audio output devices'
@@ -527,11 +936,24 @@ select_features() {
     'Windows-style screenshot shortcut (Super+Shift+S)'
     'Clipboard history (Super+V)'
     'Spotlight-style search (Super+Space)'
+    'Focus mode toggle (Super+Shift+F)'
+    'Night Light schedule'
+    'LocalSend for iPhone file sharing'
+    'Files preferences'
+    'Window tiling and workspaces'
+    'Lock screen and idle timeout'
+    'Clipboard privacy (clear on login)'
+    'Add startup applications'
+    'Dock position and size'
+    'Restore a previous setup backup'
   )
 
   MENU_TAGS=("${features[@]}")
   MENU_LABELS=("${labels[@]}")
-  MENU_STATUSES=(OFF OFF OFF OFF OFF OFF)
+  MENU_STATUSES=()
+  for feature in "${features[@]}"; do
+    MENU_STATUSES+=(OFF)
+  done
   show_checklist 'Zorin Personal Setup' \
     'Select the features to configure. Unselected features will be left unchanged.' || \
     return 1
@@ -713,6 +1135,149 @@ apply_audio_plan() {
   done
 }
 
+apply_startup_apps() {
+  local host_home
+  local config_dir
+  local manifest
+  local app_id
+  local app_path
+  local destination
+  local old_path
+  local tag
+  local content=''
+  local -A selected_ids=()
+  local -A previously_managed=()
+
+  host_home=$(host printenv HOME)
+  config_dir="$host_home/.config/autostart"
+  manifest="$host_home/.local/state/zorin-setup/startup-managed.tsv"
+  for tag in "${SELECTED_STARTUP_APPS[@]}"; do
+    selected_ids["${STARTUP_NAME_BY_TAG[$tag]}"]=1
+  done
+
+  if [[ "$DRY_RUN" == true ]]; then
+    for tag in "${SELECTED_STARTUP_APPS[@]}"; do
+      info "Would add startup app: ${STARTUP_LABEL_BY_TAG[$tag]}"
+    done
+    return
+  fi
+
+  if host test -f "$manifest"; then
+    while IFS=$'\t' read -r app_id old_path; do
+      [[ -n "$app_id" && -n "$old_path" ]] || continue
+      previously_managed["$app_id"]=$old_path
+      if [[ -z "${selected_ids[$app_id]:-}" ]]; then
+        destination="$config_dir/$app_id"
+        if host test -L "$destination" && \
+          [[ "$(host readlink "$destination")" == "$old_path" ]]; then
+          host rm "$destination"
+          info "Removed setup-managed startup app: $app_id"
+        fi
+      fi
+    done < "$manifest"
+  fi
+
+  for tag in "${SELECTED_STARTUP_APPS[@]}"; do
+    app_id=${STARTUP_NAME_BY_TAG[$tag]}
+    app_path=${STARTUP_APP_BY_TAG[$tag]}
+    destination="$config_dir/$app_id"
+    if host test -e "$destination" && ! host test -L "$destination"; then
+      warn "Existing startup entry was left unchanged: $app_id"
+      continue
+    fi
+    if host test -L "$destination" && \
+      [[ "$(host readlink "$destination")" != "$app_path" ]]; then
+      warn "Existing startup link was left unchanged: $app_id"
+      continue
+    fi
+    if ! host test -e "$destination" && ! host test -L "$destination"; then
+      host mkdir -p "$config_dir"
+      host ln -s "$app_path" "$destination"
+      info "Added startup app: ${STARTUP_LABEL_BY_TAG[$tag]}"
+      content+="$app_id"$'\t'"$app_path"$'\n'
+    elif [[ "${previously_managed[$app_id]:-}" == "$app_path" ]] && \
+      host test -L "$destination" && \
+      [[ "$(host readlink "$destination")" == "$app_path" ]]; then
+      content+="$app_id"$'\t'"$app_path"$'\n'
+    fi
+  done
+
+  if [[ "$DRY_RUN" == false ]]; then
+    printf '%s' "$content" | host install -D -m 600 /dev/stdin "$manifest"
+  fi
+}
+
+setup_focus_shortcut() {
+  local host_home
+  local script_dir
+  local helper_source
+  local helper_target
+  local shortcut_path='/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/zorin-focus-toggle/'
+  local current
+  local updated
+  local binding='<Super><Shift>f'
+
+  host_home=$(host printenv HOME)
+  script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+  helper_source="$script_dir/toggle-focus-mode.sh"
+  helper_target="$host_home/.local/bin/zorin-toggle-focus"
+  if ! host test -f "$helper_source"; then
+    warn "Focus toggle helper not found: $helper_source"
+    return
+  fi
+  info "Install Focus mode toggle at $helper_target ($binding)"
+  if [[ "$DRY_RUN" == true ]]; then
+    return
+  fi
+
+  host install -D -m 755 "$helper_source" "$helper_target"
+  current=$(host gsettings get org.gnome.settings-daemon.plugins.media-keys \
+    custom-keybindings)
+  updated=$(printf '%s\n%s\n' "$current" "$shortcut_path" | host python3 -c '
+import ast
+import sys
+
+paths = ast.literal_eval(sys.stdin.readline())
+path = sys.stdin.readline().strip()
+if path not in paths:
+    paths.append(path)
+print("[" + ", ".join(repr(item) for item in paths) + "]")
+')
+  host gsettings set org.gnome.settings-daemon.plugins.media-keys \
+    custom-keybindings "$updated"
+  host gsettings --path="$shortcut_path" \
+    set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding name \
+    "'Focus mode'"
+  host gsettings --path="$shortcut_path" \
+    set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding command \
+    "'$helper_target'"
+  host gsettings --path="$shortcut_path" \
+    set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding binding \
+    "'$binding'"
+}
+
+install_localsend() {
+  if ! host_has flatpak; then
+    warn 'Flatpak is not installed; skipping LocalSend.'
+    return
+  fi
+  if host flatpak info --user org.localsend.localsend_app >/dev/null 2>&1 || \
+    host flatpak info --system org.localsend.localsend_app >/dev/null 2>&1; then
+    info 'LocalSend is already installed.'
+    return
+  fi
+  info 'Install LocalSend as a per-user Flatpak.'
+  if [[ "$DRY_RUN" == true ]]; then
+    return
+  fi
+  if ! host flatpak remotes --columns=name | host grep -Fxq flathub; then
+    host flatpak remote-add --user --if-not-exists flathub \
+      https://flathub.org/repo/flathub.flatpakrepo
+  fi
+  host flatpak install --user --noninteractive --assumeyes \
+    flathub org.localsend.localsend_app
+}
+
 print_selection_summary() {
   local feature
   local tag
@@ -726,6 +1291,15 @@ print_selection_summary() {
       shortcuts) summary+=$'\n- Windows-style screenshot shortcuts' ;;
       clipboard) summary+=$'\n- Clipboard history' ;;
       spotlight) summary+=$'\n- Spotlight-style search' ;;
+      focus) summary+=$'\n- Focus mode toggle (Super+Shift+F)' ;;
+      night-light) summary+=$'\n- Night Light with automatic schedule' ;;
+      localsend) summary+=$'\n- Install LocalSend for this user' ;;
+      files) summary+=$'\n- Files preferences' ;;
+      window-tiling) summary+=$'\n- Zorin window tiling shortcuts' ;;
+      lock-screen) summary+=$'\n- Lock screen and idle timeout' ;;
+      clipboard-privacy) summary+=$'\n- Clear clipboard history at login' ;;
+      startup-apps) summary+=$'\n- Add selected startup applications' ;;
+      dock-preferences) summary+=$'\n- Dock position and size' ;;
     esac
   done
 
@@ -743,7 +1317,34 @@ print_selection_summary() {
       summary+=${AUDIO_LABEL_BY_TAG[$tag]}
     done
   fi
-
+  if feature_selected files; then
+    summary+=$'\n\nFiles preferences:'
+    for setting in \
+      org.gnome.nautilus.preferences:show-hidden-files \
+      org.gnome.nautilus.preferences:always-use-location-entry \
+      org.gnome.nautilus.preferences:click-policy; do
+      summary+=$'\n- '
+      summary+="$setting = ${SELECTED_FILE_SETTINGS[$setting]}"
+    done
+  fi
+  if feature_selected dock-preferences; then
+    summary+=$'\n\nDock: '
+    summary+="$SELECTED_DOCK_POSITION, $SELECTED_DOCK_SIZE px"
+  fi
+  if feature_selected lock-screen; then
+    summary+=$'\n\nLock after inactivity: '
+    summary+="$((SELECTED_LOCK_DELAY / 60)) minutes"
+  fi
+  if feature_selected startup-apps; then
+    summary+=$'\n\nStartup apps to enable:'
+    for tag in "${SELECTED_STARTUP_APPS[@]}"; do
+      summary+=$'\n- '
+      summary+=${STARTUP_LABEL_BY_TAG[$tag]}
+    done
+    if (( ${#SELECTED_STARTUP_APPS[@]} == 0 )); then
+      summary+=$'\n- None (remove only setup-managed startup links)'
+    fi
+  fi
   printf '%s' "$summary"
 }
 
@@ -754,9 +1355,12 @@ apply_selected_features() {
   shell_version=$(host gnome-shell --version | host awk '{print $3}')
   shell_major=${shell_version%%.*}
 
-  if feature_selected clipboard; then
+  if feature_selected clipboard || feature_selected clipboard-privacy; then
     install_extension_if_needed "$CLIPBOARD_UUID" "$shell_major"
     enable_extension "$CLIPBOARD_UUID"
+  fi
+
+  if feature_selected clipboard; then
     set_extension_gsetting "$CLIPBOARD_UUID" \
       org.gnome.shell.extensions.clipboard-indicator history-size 25
     set_extension_gsetting "$CLIPBOARD_UUID" \
@@ -765,6 +1369,17 @@ apply_selected_features() {
       org.gnome.shell.extensions.clipboard-indicator cache-images false
     set_extension_gsetting "$CLIPBOARD_UUID" \
       org.gnome.shell.extensions.clipboard-indicator toggle-menu "['<Super>v']"
+  fi
+
+  if feature_selected clipboard-privacy; then
+    set_extension_gsetting "$CLIPBOARD_UUID" \
+      org.gnome.shell.extensions.clipboard-indicator cache-only-favorites true
+    set_extension_gsetting "$CLIPBOARD_UUID" \
+      org.gnome.shell.extensions.clipboard-indicator cache-images false
+    set_extension_gsetting "$CLIPBOARD_UUID" \
+      org.gnome.shell.extensions.clipboard-indicator clear-on-boot true
+    set_extension_gsetting "$CLIPBOARD_UUID" \
+      org.gnome.shell.extensions.clipboard-indicator show-private-mode true
   fi
 
   if feature_selected spotlight; then
@@ -778,6 +1393,57 @@ apply_selected_features() {
       org.gnome.shell.extensions.search-light show-panel-icon true
     set_gsetting org.gnome.desktop.wm.keybindings switch-input-source \
       "['<Super><Alt>space', 'XF86Keyboard']"
+  fi
+
+  if feature_selected focus; then
+    setup_focus_shortcut
+  fi
+
+  if feature_selected night-light; then
+    set_gsetting org.gnome.settings-daemon.plugins.color night-light-schedule-automatic true
+    set_gsetting org.gnome.settings-daemon.plugins.color night-light-enabled true
+  fi
+
+  if feature_selected localsend; then
+    install_localsend
+  fi
+
+  if feature_selected files; then
+    set_gsetting org.gnome.nautilus.preferences show-hidden-files \
+      "${SELECTED_FILE_SETTINGS[org.gnome.nautilus.preferences:show-hidden-files]}"
+    set_gsetting org.gnome.nautilus.preferences always-use-location-entry \
+      "${SELECTED_FILE_SETTINGS[org.gnome.nautilus.preferences:always-use-location-entry]}"
+    set_gsetting org.gnome.nautilus.preferences click-policy \
+      "'${SELECTED_FILE_SETTINGS[org.gnome.nautilus.preferences:click-policy]}'"
+  fi
+
+  if feature_selected window-tiling; then
+    set_gsetting org.gnome.shell.extensions.zorin-tiling-shell enable-tiling-system true
+    set_gsetting org.gnome.shell.extensions.zorin-tiling-shell enable-move-keybindings true
+    set_gsetting org.gnome.mutter dynamic-workspaces true
+  fi
+
+  if feature_selected lock-screen; then
+    set_gsetting org.gnome.desktop.screensaver lock-enabled true
+    set_gsetting org.gnome.desktop.screensaver lock-delay 'uint32 0'
+    set_gsetting org.gnome.desktop.session idle-delay "uint32 $SELECTED_LOCK_DELAY"
+  fi
+
+  if feature_selected clipboard-privacy; then
+    set_extension_gsetting "$CLIPBOARD_UUID" \
+      org.gnome.shell.extensions.clipboard-indicator clear-on-boot true
+    set_extension_gsetting "$CLIPBOARD_UUID" \
+      org.gnome.shell.extensions.clipboard-indicator show-private-mode true
+  fi
+
+  if feature_selected startup-apps; then
+    apply_startup_apps
+  fi
+
+  if feature_selected dock-preferences; then
+    enable_extension "$TASKBAR_UUID"
+    set_gsetting "$TASKBAR_SCHEMA" panel-position "'$SELECTED_DOCK_POSITION'"
+    set_gsetting "$TASKBAR_SCHEMA" panel-size "$SELECTED_DOCK_SIZE"
   fi
 
   if feature_selected topbar; then
@@ -824,6 +1490,33 @@ main() {
     exit 0
   fi
 
+  if feature_selected restore; then
+    if (( ${#SELECTED_FEATURES[@]} != 1 )); then
+      show_message 'Restore must be selected alone' \
+        'Choose Restore a previous setup backup by itself, then run the setup again for other features.'
+      exit 0
+    fi
+    if ! select_restore_backup; then
+      info 'Backup selection cancelled; no settings were changed.'
+      exit 0
+    fi
+    summary="Restore managed settings from ${SELECTED_BACKUP##*/}. Locally installed apps will not be removed."
+    if ! ask_confirmation 'Confirm settings restore' "$summary"; then
+      info 'Restore cancelled; no settings were changed.'
+      exit 0
+    fi
+    if [[ "$DRY_RUN" == false ]]; then
+      backup_current_settings
+    else
+      info 'Dry run: no changes will be saved.'
+    fi
+    restore_backup "$SELECTED_BACKUP"
+    if [[ "$DRY_RUN" == true ]]; then
+      info 'Dry run complete; no settings were changed.'
+    fi
+    exit 0
+  fi
+
   if feature_selected audio-output && ! select_audio_endpoints output; then
     info 'Audio output selection cancelled; no settings were changed.'
     exit 0
@@ -834,6 +1527,22 @@ main() {
   fi
   if feature_selected audio-output || feature_selected audio-input; then
     build_audio_plan || exit 1
+  fi
+  if feature_selected files && ! select_file_preferences; then
+    info 'Files preference selection cancelled; no settings were changed.'
+    exit 0
+  fi
+  if feature_selected dock-preferences && ! select_dock_preferences; then
+    info 'Dock preference selection cancelled; no settings were changed.'
+    exit 0
+  fi
+  if feature_selected lock-screen && ! select_lock_screen_options; then
+    info 'Lock screen selection cancelled; no settings were changed.'
+    exit 0
+  fi
+  if feature_selected startup-apps && ! select_startup_apps; then
+    info 'Startup app selection cancelled; no settings were changed.'
+    exit 0
   fi
 
   summary=$(print_selection_summary)
@@ -855,10 +1564,11 @@ main() {
 
   info "Applying configuration to Zorin OS with GNOME $shell_version"
   backup_current_settings
-  if feature_selected topbar || feature_selected clipboard || feature_selected spotlight; then
+  if feature_selected topbar || feature_selected clipboard || feature_selected spotlight || \
+    feature_selected window-tiling || feature_selected dock-preferences; then
     host_has gnome-extensions || fail 'gnome-extensions is required.'
   fi
-  if feature_selected clipboard || feature_selected spotlight; then
+  if feature_selected clipboard || feature_selected clipboard-privacy || feature_selected spotlight; then
     host_has curl || fail 'curl is required to download GNOME extensions.'
   fi
   apply_selected_features
